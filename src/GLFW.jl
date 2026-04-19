@@ -47,26 +47,47 @@ include("glfw3.jl")
 include("vulkan.jl")
 include("monitor_properties.jl")
 
+const _init_errors = Exception[]
+
+function _SetErrorCallbackPtr(callback::Ptr{Cvoid})
+	require_main_thread()
+	ccall((:glfwSetErrorCallback, libglfw), Ptr{Cvoid}, (Ptr{Cvoid},), callback)
+	return nothing
+end
+
+function _RecordErrorCallback(code::Cint, description::Cstring)
+	push!(_init_errors, GLFWError(code, unsafe_string(description)))
+	return nothing
+end
+
+function _ThrowErrorCallback(code::Cint, description::Cstring)
+	throw(GLFWError(code, unsafe_string(description)))
+	return nothing
+end
+
+_record_error_callback_ptr() = @cfunction(_RecordErrorCallback, Cvoid, (Cint, Cstring))
+_throw_error_callback_ptr() = @cfunction(_ThrowErrorCallback, Cvoid, (Cint, Cstring))
+
 function __init__()
 	# Save errors that occur during initialization
-	errors = Vector{Exception}()
-	SetErrorCallback(err -> push!(errors, err))
+	empty!(_init_errors)
+	_SetErrorCallbackPtr(_record_error_callback_ptr())
 
 	try
 		Init()
 	catch err
-		push!(errors, err)
+		push!(_init_errors, err)
 	finally
-		SetErrorCallback(throw)
+		_SetErrorCallbackPtr(_throw_error_callback_ptr())
 	end
 
 	if is_initialized()
 		atexit(Terminate)
-		for err in errors
+		for err in _init_errors
 			@warn err  # Warn about any non-fatal errors that may have occurred during initialization
 		end
 	else
-		throw(errors)  # Throw fatal errors
+		throw(copy(_init_errors))  # Throw fatal errors
 	end
 end
 
